@@ -123,3 +123,112 @@ Please report any software “bug” or other problems with the models through o
 ## Questions
 
 For common questions, the FAQ can be found [here](https://llama.meta.com/faq), which will be updated over time as new questions arise.
+
+# Llama Energy Profiling
+
+This project provides a framework for measuring and analyzing the energy consumption of Llama models during inference. It allows for component-level energy profiling by selectively enabling or disabling specific parts of the model architecture.
+
+## Features
+
+- Fine-grained energy profiling using NVIDIA Management Library (NVML)
+- Selective component enabling/disabling to measure energy impact
+- Statistical analysis of power and energy measurements
+- Visualization tools for energy consumption patterns
+- Support for Llama 3.2 with extensibility to other models
+
+## Installation
+
+1. Clone this repository:
+```bash
+git clone https://github.com/yourusername/llama-models-energy.git
+cd llama-models-energy
+```
+
+2. Install the required dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+## Requirements
+
+- Python 3.8+
+- CUDA-compatible GPU with NVML support
+- PyTorch 2.0+
+- transformers library
+- matplotlib and numpy for visualization
+- A Hugging Face compatible Llama model (e.g., Llama 3.2)
+
+## Usage
+
+### Running the Feed-Forward Network Energy Experiment
+
+The main experiment compares the energy usage of a Llama model with and without feed-forward networks enabled:
+
+```bash
+python energy_profiler/run_experiment.py --model_path /path/to/llama/model --prompt "Your test prompt here" --max_tokens 100 --num_runs 3
+```
+
+### Arguments
+
+- `--model_path`: Path to the Llama model (required)
+- `--prompt`: Input prompt for the model (default: "Explain how transformers work in artificial intelligence")
+- `--max_tokens`: Maximum number of tokens to generate (default: 100)
+- `--num_runs`: Number of runs for each configuration for statistical significance (default: 3)
+
+### Output
+
+The experiment produces:
+- Energy consumption comparison between baseline and disabled-FFN configurations
+- Power consumption over time graph
+- JSON file with detailed energy measurements
+- Terminal output summarizing the energy savings
+
+Results are saved in the `./results` directory.
+
+## Implementation Details
+
+### PowerProfiler
+
+The `PowerProfiler` class provides low-level access to GPU power measurements using NVML. It includes:
+- Baseline power measurement
+- Continuous power sampling
+- Energy calculation from power measurements
+- Statistical analysis of energy data
+
+### LlamaEnergyProfiler
+
+The `LlamaEnergyProfiler` class implements the model instrumentation:
+- Loading and management of Llama models
+- Component enabling/disabling mechanism
+- Inference profiling with energy measurements
+- Comparative analysis across different model configurations
+
+### EnergyProfiledModule
+
+This wrapper class allows individual model components to be enabled or disabled:
+- When enabled, performs normal computation
+- When disabled, returns zero tensors of the appropriate shape
+- Preserves model structure and flow while eliminating computation
+
+## Extending the Framework
+
+To profile different components:
+
+1. Identify the component classes in your model
+2. Pass these classes to the `compare_components_energy` method
+3. Adjust the experiment script as needed
+
+For example, to profile attention mechanisms:
+```python
+from transformers.models.llama.modeling_llama import LlamaAttention
+results = profiler.compare_components_energy(prompt, tokenizer, [LlamaAttention], max_tokens=100)
+```
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Acknowledgments
+
+- The Llama model architecture is developed by Meta AI
+- Energy profiling techniques inspired by various publications on ML model efficiency
