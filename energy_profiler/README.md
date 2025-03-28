@@ -1,0 +1,1 @@
+python energy_profiler/run_experiment.py --model_path /home/scottcha/.llama/checkpoints/Llama3.2-1B/ --prompt "Explain the concept of energy efficiency in large language models" --max_tokens 100 --num_runs 3

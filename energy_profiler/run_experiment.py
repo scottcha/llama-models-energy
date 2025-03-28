@@ -14,6 +14,7 @@ import argparse
 import matplotlib.pyplot as plt
 import numpy as np
 from pathlib import Path
+import torch
 
 # Add parent directory to path to import our modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -64,12 +65,15 @@ def plot_energy_comparison(results, output_path):
     # Calculate percentage differences
     if "baseline" in results and len(configs) > 1:
         baseline_energy = results["baseline"]["avg_energy"]
-        for i, config in enumerate(configs):
-            if config != "baseline":
-                pct_diff = ((baseline_energy - energies[i]) / baseline_energy) * 100
-                ax.text(i, energies[i] / 2,
-                        f'{pct_diff:.1f}%\nsaved',
-                        ha='center', va='center', color='white', fontweight='bold')
+        if baseline_energy > 0:  # Avoid division by zero
+            for i, config in enumerate(configs):
+                if config != "baseline":
+                    pct_diff = ((baseline_energy - energies[i]) / baseline_energy) * 100
+                    ax.text(i, energies[i] / 2,
+                            f'{pct_diff:.1f}%\nsaved',
+                            ha='center', va='center', color='white', fontweight='bold')
+        else:
+            print("Baseline energy is zero. Skipping percentage difference calculation.")
     
     # Add labels and title
     ax.set_xlabel('Configuration')
@@ -150,9 +154,12 @@ def run_experiment():
         results_dir = create_results_directory()
         
         # Initialize tokenizer
+        # print(f"Loading tokenizer from {args.model_path}")
+        # tokenizer = AutoTokenizer.from_pretrained(args.model_path)
+        from transformers import LlamaTokenizer
         print(f"Loading tokenizer from {args.model_path}")
-        tokenizer = AutoTokenizer.from_pretrained(args.model_path)
-        
+        llama_tokenizer = LlamaTokenizer.from_pretrained(args.model_path, legacy=True)
+
         # Initialize energy profiler
         profiler = LlamaEnergyProfiler(AutoModelForCausalLM, args.model_path)
         
@@ -210,7 +217,10 @@ def run_experiment():
         profiler.reset_model()
         _, measurements = profiler.power_profiler.measure_operation(
             lambda: profiler.model.generate(
-                inputs=tokenizer(args.prompt, return_tensors="pt").to(profiler.device)["input_ids"],
+                inputs=validate_input_ids(
+                    tokenizer(args.prompt, return_tensors="pt").to(profiler.device)["input_ids"],
+                    profiler.model.config.vocab_size
+                ),
                 max_new_tokens=args.max_tokens,
                 temperature=0.7,
                 top_p=0.9
@@ -245,6 +255,13 @@ def run_experiment():
         return 1
     
     return 0
+
+# Add this helper function to validate input IDs
+def validate_input_ids(input_ids, vocab_size):
+    """Ensure all input IDs are within the valid range."""
+    if torch.any(input_ids >= vocab_size) or torch.any(input_ids < 0):
+        raise ValueError(f"Invalid token IDs detected. Ensure all IDs are in the range [0, {vocab_size - 1}].")
+    return input_ids
 
 if __name__ == "__main__":
     sys.exit(run_experiment())

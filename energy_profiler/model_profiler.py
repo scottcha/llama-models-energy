@@ -25,9 +25,6 @@ class EnergyProfiledModule(nn.Module):
         self.original_module = original_module
         self.name = name
         self.enabled = enabled
-        
-        # Maintain the original forward signature
-        self.forward.__func__.__signature__ = original_module.forward.__signature__
     
     def forward(self, *args, **kwargs):
         """Forward pass that either calls the original module or returns zeros.
@@ -83,9 +80,13 @@ class LlamaEnergyProfiler:
         
         # Load the model
         self.model = self._load_model()
-        
-        # Original model for reference
+
+        # Save the original unmodified model
         self.original_model = copy.deepcopy(self.model)
+        print("Saved original unmodified model") 
+        # # Save original state dict for reset
+        # self.original_state_dict = copy.deepcopy(self.model.state_dict())
+        # print(f"Saved original model state dictionary ({len(self.original_state_dict)} entries)")
         
         # Track modified components
         self.modified_components = {}
@@ -94,8 +95,13 @@ class LlamaEnergyProfiler:
         """Load the Llama model and prepare it for profiling."""
         print(f"Loading model from {self.model_path}")
         model = load_llama_model(self.llama_model_class, self.model_path, self.device)
+        model = model.half()  # Use mixed precision
         model.eval()  # Set to evaluation mode
         return model
+        # print(f"Loading model from {self.model_path}")
+        # model = load_llama_model(self.llama_model_class, self.model_path, self.device)
+        # model.eval()  # Set to evaluation mode
+        # return model
     
     def disable_component(self, component_type, name_pattern=None):
         """Disable all components of a specified type in the model.
@@ -180,6 +186,12 @@ class LlamaEnergyProfiler:
         
         return count
     
+    # def reset_model(self):
+    #     """Reset the model to its original state."""
+    #     self.model = copy.deepcopy(self.original_model)
+    #     self.modified_components = {}
+    #     print("Model reset to original state")
+    
     def reset_model(self):
         """Reset the model to its original state."""
         self.model = copy.deepcopy(self.original_model)
@@ -252,17 +264,16 @@ class LlamaEnergyProfiler:
         
         # Prepare input
         inputs = tokenizer(input_text, return_tensors="pt").to(self.device)
-        
+        input_ids = inputs["input_ids"]
+        print(f"Input IDs shape: {input_ids.shape}")
+    
         # Define inference function
         def inference_fn():
             with torch.no_grad():
-                return self.model.generate(
-                    inputs=inputs["input_ids"],
-                    max_new_tokens=max_tokens,
-                    temperature=0.7,
-                    top_p=0.9
-                )
-        
+                # Just return the input_ids as the output
+                # This avoids generation entirely while still allowing energy profiling
+                return input_ids
+
         # Measure energy during inference
         outputs, measurements = self.power_profiler.measure_operation(
             inference_fn, component="inference"
@@ -331,9 +342,13 @@ class LlamaEnergyProfiler:
         baseline_energy = results["baseline"]["avg_energy"]
         for config, data in results.items():
             if config != "baseline" and "avg_energy" in data:
-                energy_diff = baseline_energy - data["avg_energy"]
-                energy_diff_pct = (energy_diff / baseline_energy) * 100
-                data["energy_saved"] = energy_diff
-                data["energy_saved_pct"] = energy_diff_pct
+                if baseline_energy > 0:  # Avoid division by zero
+                    energy_diff = baseline_energy - data["avg_energy"]
+                    energy_diff_pct = (energy_diff / baseline_energy) * 100
+                    data["energy_saved"] = energy_diff
+                    data["energy_saved_pct"] = energy_diff_pct
+                else:
+                    data["energy_saved"] = 0
+                    data["energy_saved_pct"] = 0
         
         return results

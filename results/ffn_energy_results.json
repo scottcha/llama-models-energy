@@ -1,0 +1,44 @@
+{
+  "baseline": {
+    "energy": [
+      0,
+      0,
+      0
+    ],
+    "power": [
+      0,
+      0,
+      0
+    ],
+    "duration": [
+      0,
+      0,
+      0
+    ],
+    "avg_energy": 0.0,
+    "avg_power": 0.0,
+    "avg_duration": 0.0
+  },
+  "without_LlamaMLP": {
+    "energy": [
+      0,
+      0,
+      0
+    ],
+    "power": [
+      0,
+      0,
+      0
+    ],
+    "duration": [
+      0,
+      0,
+      0
+    ],
+    "avg_energy": 0.0,
+    "avg_power": 0.0,
+    "avg_duration": 0.0,
+    "energy_saved": 0,
+    "energy_saved_pct": 0
+  }
+}
