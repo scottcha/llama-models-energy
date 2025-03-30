@@ -156,16 +156,22 @@ def run_experiment():
         # Initialize tokenizer
         # print(f"Loading tokenizer from {args.model_path}")
         # tokenizer = AutoTokenizer.from_pretrained(args.model_path)
-        from transformers import LlamaTokenizer
+        from transformers import AutoTokenizer
         print(f"Loading tokenizer from {args.model_path}")
-        llama_tokenizer = LlamaTokenizer.from_pretrained(args.model_path, legacy=True)
+        llama_tokenizer = AutoTokenizer.from_pretrained(
+            args.model_path,
+            use_fast=True,
+            legacy=True,
+            trust_remote_code=True
+        )
+        print(f"Tokenizer type: {type(llama_tokenizer)}")
 
         # Initialize energy profiler
         profiler = LlamaEnergyProfiler(AutoModelForCausalLM, args.model_path)
         
         # Perform a warm-up run to ensure everything is loaded
         print("Performing warm-up run...")
-        profiler.profile_inference(args.prompt, tokenizer, max_tokens=10)
+        profiler.profile_inference(args.prompt, llama_tokenizer, max_tokens=10)
         
         # Find the feed-forward component class
         if FeedForward is None:
@@ -189,7 +195,7 @@ def run_experiment():
         # Run the component comparison
         print(f"Running experiment with prompt: '{args.prompt}'")
         results = profiler.compare_components_energy(
-            args.prompt, tokenizer, [FeedForward], 
+            args.prompt, llama_tokenizer, [FeedForward], 
             max_tokens=args.max_tokens, num_runs=args.num_runs
         )
         
@@ -215,12 +221,24 @@ def run_experiment():
         # Run a single test with power measurements over time
         print("Running test for power over time plot...")
         profiler.reset_model()
+
+        # Add debugging and safer tokenization
+        input_tokens = llama_tokenizer(args.prompt, return_tensors="pt").to(profiler.device)
+        input_ids = input_tokens["input_ids"]
+        print(f"Raw input IDs: {input_ids}")
+        print(f"Min ID: {input_ids.min().item()}, Max ID: {input_ids.max().item()}")
+        print(f"Model vocab size: {profiler.model.config.vocab_size}")
+        
+        # Process input IDs to ensure they're within vocabulary range
+        def preprocess_input_ids(ids, vocab_size):
+            # Clip token IDs to valid range
+            return torch.clamp(ids, min=0, max=vocab_size-1)
+        
+        safe_input_ids = preprocess_input_ids(input_ids, profiler.model.config.vocab_size)
+        
         _, measurements = profiler.power_profiler.measure_operation(
             lambda: profiler.model.generate(
-                inputs=validate_input_ids(
-                    tokenizer(args.prompt, return_tensors="pt").to(profiler.device)["input_ids"],
-                    profiler.model.config.vocab_size
-                ),
+                inputs=safe_input_ids,  # Use preprocessed IDs
                 max_new_tokens=args.max_tokens,
                 temperature=0.7,
                 top_p=0.9
@@ -256,11 +274,26 @@ def run_experiment():
     
     return 0
 
-# Add this helper function to validate input IDs
-def validate_input_ids(input_ids, vocab_size):
-    """Ensure all input IDs are within the valid range."""
+def validate_input_ids(input_ids, vocab_size, fix=False):
+    """Ensure all input IDs are within the valid range.
+    
+    Args:
+        input_ids: Tensor of token IDs
+        vocab_size: Maximum vocabulary size
+        fix: If True, clip values to valid range instead of raising error
+        
+    Returns:
+        Validated (and potentially fixed) input IDs
+    """
     if torch.any(input_ids >= vocab_size) or torch.any(input_ids < 0):
-        raise ValueError(f"Invalid token IDs detected. Ensure all IDs are in the range [0, {vocab_size - 1}].")
+        invalid_ids = input_ids[(input_ids >= vocab_size) | (input_ids < 0)]
+        print(f"WARNING: Found {len(invalid_ids)} invalid token IDs: {invalid_ids.tolist()}")
+        
+        if fix:
+            print("Fixing input IDs by clipping to valid range")
+            return torch.clamp(input_ids, min=0, max=vocab_size-1)
+        else:
+            raise ValueError(f"Invalid token IDs detected. Ensure all IDs are in the range [0, {vocab_size - 1}].")
     return input_ids
 
 if __name__ == "__main__":

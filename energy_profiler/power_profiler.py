@@ -48,7 +48,7 @@ class PowerMeasurement:
 class PowerProfiler:
     """Power profiling tool using NVML to measure GPU power consumption."""
     
-    def __init__(self, device_id=0, sampling_rate_ms=50, baseline_samples=100):
+    def __init__(self, device_id=0, sampling_rate_ms=10, baseline_samples=100):
         """Initialize the power profiler.
         
         Args:
@@ -109,7 +109,7 @@ class PowerProfiler:
         gpu_util = util.gpu  # in percent
         mem_util = util.memory  # in percent
         temp = pynvml.nvmlDeviceGetTemperature(self.handle, pynvml.NVML_TEMPERATURE_GPU)  # in celsius
-        
+        #print(f"Power: {power / 1000:.2f} W, GPU Util: {gpu_util}%, Mem Util: {mem_util}%, Temp: {temp}C") 
         return PowerMeasurement(
             time.time(),
             power,
@@ -125,6 +125,7 @@ class PowerProfiler:
         while not self.stop_sampling.is_set():
             try:
                 measurement = self._get_measurement()
+                #print(f"Inserting Sampled power: {measurement.power_w:.2f} W, GPU Util: {measurement.gpu_util}%, Mem Util: {measurement.mem_util}%, Temp: {measurement.temp}C")
                 self.sampling_queue.put(measurement)
                 time.sleep(self.sampling_interval_s)
             except Exception as e:
@@ -156,7 +157,11 @@ class PowerProfiler:
         if self.sampling_thread is None or not self.sampling_thread.is_alive():
             print("No sampling in progress")
             return self.measurements
-        
+
+        #wait until we get at least one more sample
+        while self.sampling_queue.empty():
+            time.sleep(0.1)
+
         # Stop sampling thread
         self.stop_sampling.set()
         self.sampling_thread.join(timeout=2.0)
@@ -181,8 +186,16 @@ class PowerProfiler:
             Tuple of (operation result, PowerMeasurements during operation)
         """
         self.start_continuous_sampling()
+        # Wait for at least one measurement to be taken before starting operation
+        initial_wait = 0
+        max_wait = 1.0  # Maximum 1 second wait
+        while not self.measurements and initial_wait < max_wait:
+            time.sleep(0.05)
+            initial_wait += 0.05
+
         start_time = time.time()
-        
+        print(f"Operation starting at: {start_time}") 
+
         # Execute operation
         try:
             result = operation_fn(*args, **kwargs)
@@ -191,11 +204,25 @@ class PowerProfiler:
             raise e
         
         end_time = time.time()
+        print(f"Operation completed at: {end_time}, duration: {end_time - start_time:.3f}s")
+
+        # Wait briefly to ensure we capture measurements after operation
+        time.sleep(2 * self.sampling_interval_s)
+
         measurements = self.stop_continuous_sampling()
+        # Debug info
+        if measurements:
+            print(f"First measurement time: {measurements[0].timestamp}, Last: {measurements[-1].timestamp}")
+            print(f"Time range: {measurements[-1].timestamp - measurements[0].timestamp:.3f}s")
         
-        # Filter measurements to only include those during the operation
-        op_measurements = [m for m in measurements if start_time <= m.timestamp <= end_time]
+        # Use a much larger buffer to catch nearby measurements
+        time_buffer = max(0.05, 5 * self.sampling_interval_s)  # at least 50ms buffer
+ 
+        op_measurements = [m for m in measurements if 
+                        (start_time - time_buffer) <= m.timestamp <= (end_time + time_buffer)]
         
+        print(f"Total measurements: {len(measurements)}, filtered for operation: {len(op_measurements)}")
+    
         # Add component info to measurements
         for m in op_measurements:
             m.component = component
