@@ -1,1 +1,3 @@
 python energy_profiler/run_experiment.py --model_path /home/scottcha/.llama/checkpoints/Llama3.2-1B/ --prompt "Explain the concept of energy efficiency in large language models" --max_tokens 100 --num_runs 3
+
+export CUDA_LAUNCH_BLOCKING=1 && export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True && python energy_profiler/run_experiment.py --layer-wise --model_path ~/.llama/checkpoints/Llama3.2-1B/ --prompt "Explain the energy use of various llm model layers in technical depth." --max_tokens 1000 --num_runs 3

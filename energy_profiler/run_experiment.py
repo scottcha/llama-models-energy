@@ -16,7 +16,6 @@ import numpy as np
 from pathlib import Path
 import torch
 # Add to imports
-from energy_profiler.layer_profiler import LayerEnergyProfiler
 
 # Add parent directory to path to import our modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -24,6 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Import the necessary modules
 from energy_profiler.power_profiler import PowerProfiler
 from energy_profiler.model_profiler import LlamaEnergyProfiler
+from energy_profiler.layer_profiler import LayerEnergyProfiler
 
 def create_results_directory():
     """Create a directory to store results if it doesn't exist."""
