@@ -125,6 +125,7 @@ def plot_power_over_time(measurements, output_path):
     plt.savefig(output_path)
     print(f"Saved power over time plot to {output_path}")
 
+
 def run_experiment():
     """Run the energy profiling experiment."""
     parser = argparse.ArgumentParser(description="Energy profiling experiment for Llama 3.2")
@@ -309,26 +310,87 @@ def run_layer_experiment():
         print("Performing warm-up run...")
         profiler.profile_inference(args.prompt, tokenizer, max_tokens=10)
         
-        # Identify component types to profile
+        # # Identify component types to profile
+        # component_types = []
+        
+        # # First, try to find MLP/Feed-Forward components
+        # try:
+        #     from transformers.models.llama.modeling_llama import LlamaMLP
+        #     component_types.append('LlamaMLP')
+        # except ImportError:
+        #     # Look through model for MLP components
+        #     for layer_type in profiler.layer_map.keys():
+        #         if 'mlp' in layer_type.lower() or 'feed' in layer_type.lower():
+        #             component_types.append(layer_type)
+        #             break
+        
+        # # Then look for attention components
+        # for layer_type in profiler.layer_map.keys():
+        #     if 'atten' in layer_type.lower():
+        #         component_types.append(layer_type)
+        #         break
+
+        # Replace the component type detection section (around line 312)
+        # Identify component types to profile - more comprehensive approach
         component_types = []
         
-        # First, try to find MLP/Feed-Forward components
-        try:
-            from transformers.models.llama.modeling_llama import LlamaMLP
-            component_types.append('LlamaMLP')
-        except ImportError:
-            # Look through model for MLP components
-            for layer_type in profiler.layer_map.keys():
-                if 'mlp' in layer_type.lower() or 'feed' in layer_type.lower():
-                    component_types.append(layer_type)
-                    break
+        # Common layer type patterns to look for
+        layer_patterns = {
+            'attention': ['atten', 'self_attn', 'kv_head'],
+            'mlp': ['mlp', 'feedforward', 'feed_forward', 'ffn'],
+            'normalization': ['norm', 'layernorm', 'rmsnorm'],
+            'embedding': ['embed', 'wte'],
+            'head': ['head', 'lm_head', 'causal_lm'],
+            'rotary': ['rotary', 'rope', 'position'],
+        }
         
-        # Then look for attention components
+        # Print all available layer types for debugging
+        print("\nAvailable layer types in model:")
         for layer_type in profiler.layer_map.keys():
-            if 'atten' in layer_type.lower():
-                component_types.append(layer_type)
-                break
+            count = len(profiler.layer_map[layer_type])
+            print(f"  {layer_type}: {count} instances")
         
+        # First try specific Llama components if available
+        try:
+            # Import specific Llama components
+            from transformers.models.llama.modeling_llama import LlamaMLP, LlamaAttention, LlamaRMSNorm
+            component_types.extend(['LlamaMLP', 'LlamaAttention', 'LlamaRMSNorm'])
+            print("Using specific Llama component types")
+        except ImportError:
+            print("Llama-specific components not found, using pattern matching")
+            
+            # If specific imports fail, use pattern matching to find all relevant layers
+            for layer_type in profiler.layer_map.keys():
+                # Skip if no instances found
+                if not profiler.layer_map[layer_type]:
+                    continue
+                    
+                # Try to categorize the layer type
+                layer_lower = layer_type.lower()
+                matched = False
+                
+                # Check against patterns
+                for category, patterns in layer_patterns.items():
+                    if any(pattern in layer_lower for pattern in patterns):
+                        component_types.append(layer_type)
+                        print(f"Found {category} component: {layer_type}")
+                        matched = True
+                        break
+                
+                # If it's a substantial component (has many instances) but didn't match patterns, include it
+                if not matched and len(profiler.layer_map[layer_type]) > 3:
+                    component_types.append(layer_type)
+                    print(f"Including uncategorized component type: {layer_type}")
+        
+        # Ensure we have at least some components to profile
+        if not component_types:
+            # Fallback: include any layer type with multiple instances
+            for layer_type, instances in profiler.layer_map.items():
+                if len(instances) > 1:
+                    component_types.append(layer_type)
+                    
+        print(f"\nWill profile these component types: {component_types}")
+
         # Profile each component type
         all_layer_results = {}
         for component_type in component_types:
@@ -391,7 +453,18 @@ def run_layer_experiment():
             # Create pie chart
             labels = list(components_energy.keys()) + ['Other Components']
             sizes = [components_pct[c] for c in components_energy.keys()] + [remaining_pct]
+               # Handle negative values - set to small positive value for visualization
+            # and warn the user
+            if any(size < 0 for size in sizes):
+                print("WARNING: Negative energy percentages detected - likely due to measurement variance")
+                print("Setting negative values to 0 for visualization purposes")
+                # Convert negatives to zeros for pie chart
+                sizes = [max(0, size) for size in sizes]
+                # Normalize to ensure percentages still sum to 100%
+                if sum(sizes) > 0:  # Avoid division by zero
+                    sizes = [size / sum(sizes) * 100 for size in sizes]
             
+       
             fig, ax = plt.subplots(figsize=(10, 8))
             wedges, texts, autotexts = ax.pie(sizes, labels=labels, autopct='%1.1f%%',
                                              shadow=False, startangle=90)
@@ -404,7 +477,20 @@ def run_layer_experiment():
             print(f"Saved model energy distribution chart to {pie_chart_path}")
         
         print("\nLayer-wise profiling experiment completed successfully!")
-        
+        try:
+            # Visualize all layer types together
+            all_types_path = results_dir / "all_layer_types_summary.png"
+            profiler.visualize_all_layer_types(all_types_path)
+            print(f"Saved summary of all layer types to {all_types_path}")
+            
+            # Visualize all individual layers across types
+            all_layers_path = results_dir / "all_individual_layers.png"
+            profiler.visualize_all_layers(all_layers_path)
+            print(f"Saved visualization of all individual layers to {all_layers_path}")
+        except Exception as e:
+            print(f"Error generating comprehensive visualizations: {e}")
+            import traceback
+            traceback.print_exc() 
     except Exception as e:
         print(f"Error during layer experiment: {e}")
         import traceback
