@@ -15,6 +15,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from pathlib import Path
 import torch
+# Add to imports
+from energy_profiler.layer_profiler import LayerEnergyProfiler
 
 # Add parent directory to path to import our modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -274,6 +276,143 @@ def run_experiment():
     
     return 0
 
+# Add this function
+def run_layer_experiment():
+    """Run layer-by-layer energy profiling experiment."""
+    parser = argparse.ArgumentParser(description="Layer-wise energy profiling for Llama models")
+    parser.add_argument("--model_path", type=str, required=True, help="Path to the model")
+    parser.add_argument("--prompt", type=str, default="Explain how transformers work", help="Prompt for inference")
+    parser.add_argument("--max_tokens", type=int, default=20, help="Maximum tokens to process")
+    parser.add_argument("--num_runs", type=int, default=3, help="Number of runs per layer")
+    
+    args = parser.parse_args()
+    
+    try:
+        # Import necessary models
+        from transformers import AutoTokenizer, AutoModelForCausalLM
+        
+        # Create results directory
+        results_dir = create_results_directory()
+        
+        # Initialize tokenizer
+        tokenizer = AutoTokenizer.from_pretrained(
+            args.model_path,
+            use_fast=True,
+            legacy=True,
+            trust_remote_code=True
+        )
+        
+        # Initialize layer profiler
+        profiler = LayerEnergyProfiler(AutoModelForCausalLM, args.model_path)
+        
+        # Perform warm-up run
+        print("Performing warm-up run...")
+        profiler.profile_inference(args.prompt, tokenizer, max_tokens=10)
+        
+        # Identify component types to profile
+        component_types = []
+        
+        # First, try to find MLP/Feed-Forward components
+        try:
+            from transformers.models.llama.modeling_llama import LlamaMLP
+            component_types.append('LlamaMLP')
+        except ImportError:
+            # Look through model for MLP components
+            for layer_type in profiler.layer_map.keys():
+                if 'mlp' in layer_type.lower() or 'feed' in layer_type.lower():
+                    component_types.append(layer_type)
+                    break
+        
+        # Then look for attention components
+        for layer_type in profiler.layer_map.keys():
+            if 'atten' in layer_type.lower():
+                component_types.append(layer_type)
+                break
+        
+        # Profile each component type
+        all_layer_results = {}
+        for component_type in component_types:
+            print(f"\n=== Profiling {component_type} layers ===")
+            
+            # Run the profiling
+            layer_results = profiler.profile_all_layers(
+                component_type, 
+                args.prompt,
+                tokenizer,
+                max_tokens=args.max_tokens,
+                num_runs=args.num_runs
+            )
+            
+            # Visualize and save results
+            output_path = results_dir / f"{component_type}_energy_breakdown.png"
+            profiler.visualize_layer_energy(component_type, output_path)
+            
+            # Store results
+            all_layer_results[component_type] = layer_results
+        
+        # Generate comprehensive model energy breakdown
+        components_energy = {}
+        baseline_energy = None
+        
+        # Extract component energy totals
+        for component_type, results in all_layer_results.items():
+            # Get baseline energy (should be the same for all components)
+            if baseline_energy is None:
+                baseline_energy = results["baseline"]["avg_energy"]
+            
+            # Sum energy across all layers of this type
+            total_component_energy = 0
+            for key, data in results.items():
+                if key != "baseline" and "layer_energy_contribution" in data:
+                    total_component_energy += data["layer_energy_contribution"]
+            
+            components_energy[component_type] = total_component_energy
+        
+        # Calculate percentage of total energy
+        if baseline_energy:
+            components_pct = {
+                component: (energy / baseline_energy) * 100
+                for component, energy in components_energy.items()
+            }
+            
+            # Calculate remaining energy (not attributed to profiled components)
+            total_profiled_energy = sum(components_energy.values())
+            remaining_energy = baseline_energy - total_profiled_energy
+            remaining_pct = (remaining_energy / baseline_energy) * 100
+            
+            # Print summary
+            print("\n=== MODEL ENERGY BREAKDOWN ===")
+            print(f"Total model energy: {baseline_energy:.2f} J")
+            for component, energy in components_energy.items():
+                pct = components_pct[component]
+                print(f"  {component}: {energy:.2f} J ({pct:.1f}%)")
+            print(f"  Other components: {remaining_energy:.2f} J ({remaining_pct:.1f}%)")
+            
+            # Create pie chart
+            labels = list(components_energy.keys()) + ['Other Components']
+            sizes = [components_pct[c] for c in components_energy.keys()] + [remaining_pct]
+            
+            fig, ax = plt.subplots(figsize=(10, 8))
+            wedges, texts, autotexts = ax.pie(sizes, labels=labels, autopct='%1.1f%%',
+                                             shadow=False, startangle=90)
+            ax.axis('equal')  # Equal aspect ratio ensures that pie is drawn as a circle
+            plt.title('Energy Distribution by Component Type')
+            
+            # Save the pie chart
+            pie_chart_path = results_dir / "model_energy_distribution.png"
+            plt.savefig(pie_chart_path)
+            print(f"Saved model energy distribution chart to {pie_chart_path}")
+        
+        print("\nLayer-wise profiling experiment completed successfully!")
+        
+    except Exception as e:
+        print(f"Error during layer experiment: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+    
+    return 0
+
 def validate_input_ids(input_ids, vocab_size, fix=False):
     """Ensure all input IDs are within the valid range.
     
@@ -296,5 +435,11 @@ def validate_input_ids(input_ids, vocab_size, fix=False):
             raise ValueError(f"Invalid token IDs detected. Ensure all IDs are in the range [0, {vocab_size - 1}].")
     return input_ids
 
+# Modify main to allow selecting the experiment type
 if __name__ == "__main__":
-    sys.exit(run_experiment())
+    if len(sys.argv) > 1 and sys.argv[1] == "--layer-wise":
+        # Remove the flag before passing to the experiment
+        sys.argv.pop(1)
+        sys.exit(run_layer_experiment())
+    else:
+        sys.exit(run_experiment())
